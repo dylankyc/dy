@@ -29,6 +29,17 @@ RAW_BASE=${RAW_BASE:-https://raw.githubusercontent.com/dylankyc/dy/main}
 BASE=${BASE:-http://127.0.0.1:$PORT}
 CMD=${1:-up}
 
+# $0 is "bash" when this script is piped from curl, which makes "$0 logs" useless advice.
+# It also moves where an env var has to go: `PORT=8081 curl … | bash` sets it for *curl*.
+case "$0" in
+  bash|sh|-bash|-sh|/dev/fd/*|/proc/self/fd/*)
+    SELF="curl -fsSL $RAW_BASE/quickstart.sh | bash -s --"
+    self_env() { printf 'curl -fsSL %s/quickstart.sh | %s bash -s --' "$RAW_BASE" "$1"; } ;;
+  *)
+    SELF=$0
+    self_env() { printf '%s %s' "$1" "$0"; } ;;
+esac
+
 if [ -t 1 ]; then G=$'\033[32m'; Y=$'\033[33m'; R=$'\033[31m'; B=$'\033[1m'; Z=$'\033[0m'
 else G=""; Y=""; R=""; B=""; Z=""; fi
 say()  { printf '%s\n' "$*"; }
@@ -247,9 +258,23 @@ wait_health() {
   return 1
 }
 
+# Refuse to fight over the port. Something else answering here is the single most confusing
+# failure mode: the container starts (or doesn't), your client talks to the *other* service, and
+# you get its 404s instead of ours — e.g. a local Kong on :8000 answering /v1/chat/completions.
+preflight_port() {
+  code=$(curl -s -m 2 -o /dev/null -w '%{http_code}' "$BASE/health" 2>/dev/null || echo 000)
+  [ "$code" = 000 ] && return 0                       # free
+  [ "$(curl -s -m 2 "$BASE/health" 2>/dev/null)" = ok ] && return 0   # our gateway; we recreate it
+  server=$(curl -s -m 2 -D - -o /dev/null "$BASE/" 2>/dev/null | sed -n 's/^[Ss]erver: *//p' | tr -d '\r' | head -1)
+  die "port $PORT is already serving something else${server:+ (Server: $server)}.
+    Free it, or pick another port and point your client at the same one:
+        $(self_env PORT=8081) up"
+}
+
 up() {
   say ""
   say "${B}AI Gateway${Z} — $IMAGE via $ENGINE, state in $GW_HOME"
+  preflight_port
   ensure_config
   ensure_env
   $ENGINE pull -q "$IMAGE" >/dev/null 2>&1 || warn "could not refresh $IMAGE — using the local copy"
@@ -267,7 +292,7 @@ up() {
         say "            macOS, Docker Desktop) only shares certain host paths — keep"
         say "            AI_GATEWAY_HOME under \$HOME (the default is ~/.ai-gateway)." ;;
       *"port is already allocated"*|*"address already in use"*|*bind*)
-        say "      hint: port $PORT is taken. Re-run with  PORT=18080 $0" ;;
+        say "      hint: port $PORT is taken. Re-run with  $(self_env PORT=18080) up" ;;
     esac
     exit 1
   fi
@@ -290,7 +315,7 @@ up() {
   say "    OpenAI SDKs  OPENAI_BASE_URL=$BASE/v1"
   say "    full guide   https://github.com/dylankyc/dy"
   say ""
-  say "  logs: $0 logs   ·   stop: $0 down   ·   routes: $GW_HOME/gateway.config.yml"
+  say "  logs: $SELF logs   ·   stop: $SELF down   ·   routes: $GW_HOME/gateway.config.yml"
 }
 
 case "$CMD" in
@@ -332,5 +357,5 @@ case "$CMD" in
       say "  → $out"
     fi
     ;;
-  *) die "usage: quickstart.sh [up|down|restart|logs|status|models|test [alias]]" ;;
+  *) die "usage: $SELF [up|down|restart|logs|status|models|test [alias]]" ;;
 esac

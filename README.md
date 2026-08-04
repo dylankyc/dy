@@ -196,9 +196,9 @@ model_provider = "aigw"
 
 [model_providers.aigw]
 name = "ai-gateway"
-base_url = "http://127.0.0.1:8080/v1"
+base_url = "http://127.0.0.1:8080/v1"   # ← must match the port the installer printed
 env_key = "AI_GATEWAY_KEY"      # Codex requires *some* key var; the gateway ignores its value
-wire_api = "responses"
+wire_api = "responses"          # omit (or "chat") to use /v1/chat/completions instead
 ```
 
 ```bash
@@ -214,6 +214,9 @@ gateway transcodes it to Anthropic Messages.
 - `Model not found gpt-5.1-codex` (404) comes from **OpenAI**, not the gateway: your key has no
   access to that model. `curl …/v1/models` shows what the gateway offers; your provider account
   decides what it will actually serve.
+- A 404 that doesn't look like either of those usually means `base_url` points somewhere else
+  entirely — a local nginx/Kong on `:8000`, say. `curl -i http://localhost:<port>/health` should
+  answer a bare `ok`; anything with a `Server:` header is not this gateway.
 
 ---
 
@@ -297,6 +300,8 @@ credentials in `~/.ai-gateway/.env`. Both are re-read on `up`.
 | symptom | cause / fix |
 |---|---|
 | `404 unknown model: X` | the alias isn't in your config — `curl …/v1/models` |
+| a **404 from some other server** | your client is pointed at the wrong port. `curl -i localhost:<port>/health` — if the response carries a `Server:` header (nginx, kong, …) that isn't the gateway. The installer refuses to start on a busy port and names the occupant. |
+| `404` on a path with `//` | some clients join `base_url` and the path naively: `base_url = "…/v1/"` + `/chat/completions` → `/v1//chat/completions`, which the gateway does not route. Drop the trailing slash. (Codex normalises it; not everything does.) |
 | `404 Model not found Y` (upstream) | the provider won't serve that `wire_id` for your account |
 | `502 … builder error` on `azure` | `AZURE_ENDPOINT` missing — set it alongside `AZURE_API_KEY` |
 | `403` on `bedrock-*` | usually an **empty** `AWS_SESSION_TOKEN`; remove the line entirely |
@@ -304,7 +309,7 @@ credentials in `~/.ai-gateway/.env`. Both are re-read on `up`.
 | `no conversion path for surface=…` | that surface × dialect pair isn't implemented (see §5) |
 | `400 context_management` | Claude Code on the native `claude` alias — see §7 |
 | `statfs … no such file` on start | VM-backed engine can't mount that path — keep `AI_GATEWAY_HOME` under `$HOME` |
-| `port is already allocated` | `PORT=18080 quickstart.sh up` |
+| `port is already allocated` | something else owns it — `PORT=18080 quickstart.sh up`, then update your client's `base_url` to match |
 | everything 000 / connection refused | `quickstart.sh status`, then `quickstart.sh logs` |
 
 ---
