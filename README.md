@@ -173,17 +173,26 @@ OpenAI-compatible endpoint (vLLM, Ollama, OpenRouter, Groq) fits `kind: openai`.
 
 ## 5. What works where
 
-Measured against `dylandylandy/dy:v0.1.4`. Rows are the surface your *client* speaks, columns the
+Measured against `dylandylandy/dy:v0.1.5`. Rows are the surface your *client* speaks, columns the
 provider behind the alias:
 
-| surface | OpenAI (`fast`) | Anthropic (`claude`) | Gemini (`gemini`) |
-|---|---|---|---|
-| `POST /v1/chat/completions` | ✅ + stream | ✅ + stream | ✅ + stream |
-| `POST /v1/messages` (Anthropic) | ✅ + stream | ✅ + stream | ✅ + stream |
-| `POST /v1/responses` (OpenAI) | ✅ + stream | ✅ + stream | ❌ *no conversion path* |
+| surface | OpenAI (`fast`) | Anthropic (`claude`) | Bedrock (`bedrock-claude`) | Gemini (`gemini`) |
+|---|---|---|---|---|
+| `POST /v1/chat/completions` | ✅ + stream | ✅ + stream | ✅ + stream | ✅ + stream |
+| `POST /v1/messages` (Anthropic) | ✅ + stream | ✅ + stream | ✅ + stream | ✅ + stream |
+| `POST /v1/responses` (OpenAI) | ✅ + stream | ✅ + stream | ✅ + stream | ❌ *no conversion path* |
 
 The off-diagonal cells are the interesting ones: an Anthropic-shaped client reaching GPT, or Codex
-reaching Claude. Streaming is re-emitted in the *client's* dialect, not the provider's.
+reaching Claude. Streaming is re-emitted in the *client's* dialect, not the provider's — Bedrock
+answers in binary AWS eventstream frames, and the gateway decodes and re-emits them as whatever
+SSE dialect the client is speaking.
+
+Because `claude` is a **pool** (`anthropic` → `bedrock`), both legs must support the surface you
+call or the failover half is dead. All three surfaces now cover both hosts.
+
+> Failover triggers on *retryable* upstream errors — timeouts, network failures, `429` and `5xx`.
+> An authentication error (`401` on a bad key) is **terminal by design**: it is a configuration
+> bug you want surfaced, not masked by quietly spending on the next provider.
 
 ---
 
@@ -332,8 +341,8 @@ problems only — including the startup route dump, which is `info`.
 
 | tag | base | size | |
 |---|---|---|---|
-| `:latest`, `:v0.1.4` | `debian:bookworm-slim` | 116 MB | has curl → `HEALTHCHECK`, `docker exec` works; uid 10001 |
-| `:latest-distroless`, `:v0.1.4-distroless` | `gcr.io/distroless/cc-debian12` | **40 MB** | no shell, no package manager, nothing to exec into; uid 65532 |
+| `:latest`, `:v0.1.5` | `debian:bookworm-slim` | 116 MB | has curl → `HEALTHCHECK`, `docker exec` works; uid 10001 |
+| `:latest-distroless`, `:v0.1.5-distroless` | `gcr.io/distroless/cc-debian12` | **40 MB** | no shell, no package manager, nothing to exec into; uid 65532 |
 
 ```bash
 curl -fsSL …/quickstart.sh | IMAGE=docker.io/dylandylandy/dy:latest-distroless bash
@@ -356,7 +365,7 @@ quickstart.sh status                 # container state, /health, alias list
 quickstart.sh logs                   # follow; one line per request from the observer hook
 quickstart.sh restart
 quickstart.sh down
-IMAGE=docker.io/dylandylandy/dy:v0.1.4 quickstart.sh up    # pin a version
+IMAGE=docker.io/dylandylandy/dy:v0.1.5 quickstart.sh up    # pin a version
 ```
 
 Routes live in `~/.ai-gateway/gateway.config.yml` (mounted read-only at `/etc/gateway/config.yml`),
