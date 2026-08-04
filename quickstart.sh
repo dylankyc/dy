@@ -11,7 +11,7 @@
 # What it does, and nothing else:
 #   1. finds a container engine (docker, else podman);
 #   2. materialises  $AI_GATEWAY_HOME/gateway.config.yml  (routes)  and  .env  (credentials);
-#   3. runs docker.io/dylandylandy/dy:latest on :8080 and waits for /health.
+#   3. runs docker.io/dylandylandy/dy:latest on :8000 and waits for /health.
 #
 # Everything lives under $AI_GATEWAY_HOME (default ~/.ai-gateway); re-running is safe. Credentials
 # are read from your environment, else from ~/.secret/* and ~/.aws/credentials, and are written
@@ -19,7 +19,7 @@
 set -eu
 
 IMAGE=${IMAGE:-docker.io/dylandylandy/dy:latest}
-PORT=${PORT:-8080}
+PORT=${PORT:-8000}
 # Loopback by default, deliberately: the gateway does not authenticate clients (the auth hook is
 # a no-op unless a host installs one), so anything that can reach this port can spend your
 # provider credits. Put it on the network only when you mean to: BIND=0.0.0.0 …/quickstart.sh
@@ -94,7 +94,7 @@ embedded_config() {
 
 server:
   # Container-side bind; compose publishes it on the host as :18085.
-  listen: "0.0.0.0:8080"
+  listen: "0.0.0.0:8000"
 
 providers:
   # ── OpenAI (native, Bearer) ────────────────────────────────────────────────
@@ -261,14 +261,22 @@ wait_health() {
 # Refuse to fight over the port. Something else answering here is the single most confusing
 # failure mode: the container starts (or doesn't), your client talks to the *other* service, and
 # you get its 404s instead of ours — e.g. a local Kong on :8000 answering /v1/chat/completions.
+free_port() { # first candidate nothing is listening on — don't suggest a port that is also taken
+  for p in 8010 8081 18000 18080; do
+    [ "$(curl -s -m 1 -o /dev/null -w '%{http_code}' "http://127.0.0.1:$p/" 2>/dev/null)" = 000 ] && { echo "$p"; return; }
+  done
+  echo 18085
+}
 preflight_port() {
-  code=$(curl -s -m 2 -o /dev/null -w '%{http_code}' "$BASE/health" 2>/dev/null || echo 000)
+  # `$(curl … || echo 000)` would *concatenate*: a failed curl prints 000 on its own and then the
+  # fallback adds a second one, so `code` becomes "000\n000" and every free port looks occupied.
+  code=$(curl -s -m 2 -o /dev/null -w '%{http_code}' "$BASE/health" 2>/dev/null) || code=000
   [ "$code" = 000 ] && return 0                       # free
   [ "$(curl -s -m 2 "$BASE/health" 2>/dev/null)" = ok ] && return 0   # our gateway; we recreate it
   server=$(curl -s -m 2 -D - -o /dev/null "$BASE/" 2>/dev/null | sed -n 's/^[Ss]erver: *//p' | tr -d '\r' | head -1)
   die "port $PORT is already serving something else${server:+ (Server: $server)}.
     Free it, or pick another port and point your client at the same one:
-        $(self_env PORT=8081) up"
+        $(self_env "PORT=$(free_port)") up"
 }
 
 up() {
@@ -280,7 +288,7 @@ up() {
   $ENGINE pull -q "$IMAGE" >/dev/null 2>&1 || warn "could not refresh $IMAGE — using the local copy"
   $ENGINE rm -f "$NAME" >/dev/null 2>&1 || true
   if ! err=$($ENGINE run -d --name "$NAME" \
-    -p "$BIND:$PORT:8080" \
+    -p "$BIND:$PORT:8000" \
     --env-file "$GW_HOME/.env" \
     -v "$GW_HOME/gateway.config.yml:/etc/gateway/config.yml:$MOUNT_OPT" \
     --restart unless-stopped \
@@ -292,7 +300,7 @@ up() {
         say "            macOS, Docker Desktop) only shares certain host paths — keep"
         say "            AI_GATEWAY_HOME under \$HOME (the default is ~/.ai-gateway)." ;;
       *"port is already allocated"*|*"address already in use"*|*bind*)
-        say "      hint: port $PORT is taken. Re-run with  $(self_env PORT=18080) up" ;;
+        say "      hint: port $PORT is taken. Re-run with  $(self_env "PORT=$(free_port)") up" ;;
     esac
     exit 1
   fi

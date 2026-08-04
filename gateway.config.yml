@@ -8,7 +8,7 @@
 
 server:
   # Container-side bind; compose publishes it on the host as :18085.
-  listen: "0.0.0.0:8080"
+  listen: "0.0.0.0:8000"
 
 providers:
   # ── OpenAI (native, Bearer) ────────────────────────────────────────────────

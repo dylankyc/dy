@@ -18,7 +18,7 @@ coding agent never learn there are five providers back there.
 curl -fsSL https://raw.githubusercontent.com/dylankyc/dy/main/quickstart.sh | bash
 ```
 
-That's it — a gateway on **http://127.0.0.1:8080**, ready for `curl`, the OpenAI/Anthropic SDKs,
+That's it — a gateway on **http://127.0.0.1:8000**, ready for `curl`, the OpenAI/Anthropic SDKs,
 **Codex** and **Claude Code**.
 
 ---
@@ -63,7 +63,7 @@ less quickstart.sh && bash quickstart.sh
 
 | variable | default | |
 |---|---|---|
-| `PORT` | `8080` | host port |
+| `PORT` | `8000` | host port |
 | `BIND` | `127.0.0.1` | **loopback on purpose** — see [Security](#security) |
 | `AI_GATEWAY_HOME` | `~/.ai-gateway` | where config + credentials live |
 | `IMAGE` | `docker.io/dylandylandy/dy:latest` | pin a tag for reproducibility |
@@ -99,31 +99,31 @@ After editing, re-run `quickstart.sh` to recreate the container with the new env
 
 ```bash
 # the workhorse surface
-curl http://127.0.0.1:8080/v1/chat/completions -H 'content-type: application/json' -d '{
+curl http://127.0.0.1:8000/v1/chat/completions -H 'content-type: application/json' -d '{
   "model": "fast",
   "messages": [{"role": "user", "content": "Say pong"}]
 }'
 
 # same request, different provider — only the alias changed
-curl http://127.0.0.1:8080/v1/chat/completions -H 'content-type: application/json' \
+curl http://127.0.0.1:8000/v1/chat/completions -H 'content-type: application/json' \
   -d '{"model":"claude","max_tokens":64,"messages":[{"role":"user","content":"Say pong"}]}'
 
 # streaming (SSE)
-curl -N http://127.0.0.1:8080/v1/chat/completions -H 'content-type: application/json' \
+curl -N http://127.0.0.1:8000/v1/chat/completions -H 'content-type: application/json' \
   -d '{"model":"gemini","stream":true,"max_tokens":256,"messages":[{"role":"user","content":"count 1 to 5"}]}'
 
 # Anthropic Messages surface
-curl http://127.0.0.1:8080/v1/messages -H 'content-type: application/json' \
+curl http://127.0.0.1:8000/v1/messages -H 'content-type: application/json' \
   -H 'anthropic-version: 2023-06-01' \
   -d '{"model":"claude","max_tokens":64,"messages":[{"role":"user","content":"Say pong"}]}'
 
 # OpenAI Responses surface
-curl http://127.0.0.1:8080/v1/responses -H 'content-type: application/json' \
+curl http://127.0.0.1:8000/v1/responses -H 'content-type: application/json' \
   -d '{"model":"fast","input":"Say pong"}'
 
 # ops
-curl http://127.0.0.1:8080/v1/models      # every alias this gateway serves
-curl http://127.0.0.1:8080/health         # → ok
+curl http://127.0.0.1:8000/v1/models      # every alias this gateway serves
+curl http://127.0.0.1:8000/health         # → ok
 ```
 
 Unknown alias → `404 {"error":{"message":"unknown model: …"}}`, answered by the gateway before any
@@ -172,7 +172,7 @@ OpenAI-compatible endpoint (vLLM, Ollama, OpenRouter, Groq) fits `kind: openai`.
 
 ## 5. What works where
 
-Measured against `dylandylandy/dy:v0.1.2`. Rows are the surface your *client* speaks, columns the
+Measured against `dylandylandy/dy:v0.1.3`. Rows are the surface your *client* speaks, columns the
 provider behind the alias:
 
 | surface | OpenAI (`fast`) | Anthropic (`claude`) | Gemini (`gemini`) |
@@ -196,7 +196,7 @@ model_provider = "aigw"
 
 [model_providers.aigw]
 name = "ai-gateway"
-base_url = "http://127.0.0.1:8080/v1"   # ← must match the port the installer printed
+base_url = "http://127.0.0.1:8000/v1"   # ← must match the port the installer printed
 env_key = "AI_GATEWAY_KEY"      # Codex requires *some* key var; the gateway ignores its value
 wire_api = "responses"          # omit (or "chat") to use /v1/chat/completions instead
 ```
@@ -215,15 +215,17 @@ gateway transcodes it to Anthropic Messages.
   access to that model. `curl …/v1/models` shows what the gateway offers; your provider account
   decides what it will actually serve.
 - A 404 that doesn't look like either of those usually means `base_url` points somewhere else
-  entirely — a local nginx/Kong on `:8000`, say. `curl -i http://localhost:<port>/health` should
-  answer a bare `ok`; anything with a `Server:` header is not this gateway.
+  entirely — `:8000` is a popular port, and a local nginx or Kong will happily answer it with its
+  own 404. `curl -i http://localhost:<port>/health` should return a bare `ok`; anything carrying a
+  `Server:` header is not this gateway. (The installer refuses to start on an occupied port and
+  names the occupant, so this only bites when your client and the gateway disagree about the port.)
 
 ---
 
 ## 7. Claude Code
 
 ```bash
-export ANTHROPIC_BASE_URL=http://127.0.0.1:8080
+export ANTHROPIC_BASE_URL=http://127.0.0.1:8000
 export ANTHROPIC_AUTH_TOKEN=dummy      # the gateway doesn't check it; Claude Code needs it set
 export ANTHROPIC_MODEL=fast            # ← see the caveat below
 export ANTHROPIC_SMALL_FAST_MODEL=fast
@@ -249,22 +251,22 @@ Anything OpenAI-compatible works by changing the base URL; the API key can be an
 
 ```python
 from openai import OpenAI
-client = OpenAI(base_url="http://127.0.0.1:8080/v1", api_key="dummy")
+client = OpenAI(base_url="http://127.0.0.1:8000/v1", api_key="dummy")
 client.chat.completions.create(model="claude", max_tokens=64,
                                messages=[{"role": "user", "content": "Say pong"}])
 ```
 
 ```javascript
 import OpenAI from "openai";
-const client = new OpenAI({ baseURL: "http://127.0.0.1:8080/v1", apiKey: "dummy" });
+const client = new OpenAI({ baseURL: "http://127.0.0.1:8000/v1", apiKey: "dummy" });
 await client.chat.completions.create({ model: "gemini", messages: [{ role: "user", content: "Say pong" }] });
 ```
 
 ```bash
-export OPENAI_BASE_URL=http://127.0.0.1:8080/v1 OPENAI_API_KEY=dummy   # picked up by most tools
+export OPENAI_BASE_URL=http://127.0.0.1:8000/v1 OPENAI_API_KEY=dummy   # picked up by most tools
 ```
 
-Anthropic SDKs point at `ANTHROPIC_BASE_URL=http://127.0.0.1:8080`. Editors and frameworks that
+Anthropic SDKs point at `ANTHROPIC_BASE_URL=http://127.0.0.1:8000`. Editors and frameworks that
 accept a custom OpenAI endpoint (Cursor, Continue, LangChain, LlamaIndex, LiteLLM) need the same
 two settings.
 
@@ -287,7 +289,7 @@ quickstart.sh status                 # container state, /health, alias list
 quickstart.sh logs                   # follow; one line per request from the observer hook
 quickstart.sh restart
 quickstart.sh down
-IMAGE=docker.io/dylandylandy/dy:v0.1.2 quickstart.sh up    # pin a version
+IMAGE=docker.io/dylandylandy/dy:v0.1.3 quickstart.sh up    # pin a version
 ```
 
 Routes live in `~/.ai-gateway/gateway.config.yml` (mounted read-only at `/etc/gateway/config.yml`),
@@ -300,7 +302,7 @@ credentials in `~/.ai-gateway/.env`. Both are re-read on `up`.
 | symptom | cause / fix |
 |---|---|
 | `404 unknown model: X` | the alias isn't in your config — `curl …/v1/models` |
-| a **404 from some other server** | your client is pointed at the wrong port. `curl -i localhost:<port>/health` — if the response carries a `Server:` header (nginx, kong, …) that isn't the gateway. The installer refuses to start on a busy port and names the occupant. |
+| a **404 from some other server** | your client is pointed at the wrong port. `curl -i localhost:<port>/health` — if the response carries a `Server:` header (nginx, kong, …) that isn't the gateway. The installer refuses to start on a busy port and names the occupant. `:8000` is contested territory: Kong, Django and plenty of dev servers default to it. |
 | `404` on a path with `//` | some clients join `base_url` and the path naively: `base_url = "…/v1/"` + `/chat/completions` → `/v1//chat/completions`, which the gateway does not route. Drop the trailing slash. (Codex normalises it; not everything does.) |
 | `404 Model not found Y` (upstream) | the provider won't serve that `wire_id` for your account |
 | `502 … builder error` on `azure` | `AZURE_ENDPOINT` missing — set it alongside `AZURE_API_KEY` |
@@ -309,7 +311,7 @@ credentials in `~/.ai-gateway/.env`. Both are re-read on `up`.
 | `no conversion path for surface=…` | that surface × dialect pair isn't implemented (see §5) |
 | `400 context_management` | Claude Code on the native `claude` alias — see §7 |
 | `statfs … no such file` on start | VM-backed engine can't mount that path — keep `AI_GATEWAY_HOME` under `$HOME` |
-| `port is already allocated` | something else owns it — `PORT=18080 quickstart.sh up`, then update your client's `base_url` to match |
+| `port is already allocated` | something else owns it — `PORT=8001 quickstart.sh up`, then update your client's `base_url` to match |
 | everything 000 / connection refused | `quickstart.sh status`, then `quickstart.sh logs` |
 
 ---
