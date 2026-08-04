@@ -173,7 +173,7 @@ OpenAI-compatible endpoint (vLLM, Ollama, OpenRouter, Groq) fits `kind: openai`.
 
 ## 5. What works where
 
-Measured against `dylandylandy/dy:v0.1.7`. Rows are the surface your *client* speaks, columns the
+Measured against `dylandylandy/dy:v0.1.8`. Rows are the surface your *client* speaks, columns the
 provider behind the alias:
 
 | surface | OpenAI (`fast`) | Anthropic (`claude`) | Bedrock (`bedrock-claude`) | Gemini (`gemini`) |
@@ -257,6 +257,7 @@ than forwarding a 400:
 | `thinking: {type: "adaptive"}` | Bedrock rejects the tag; Anthropic rejects it per-model | dropped (recorded as a downgrade) — `enabled`/`disabled` pass through untouched |
 | `output_config`, `mcp_servers`, `service_tier`, `context_management` | Bedrock: `"…: Extra inputs are not permitted"` | filtered to the fields the invoke schema accepts |
 | a `system`-role entry inside `messages[]` | **every** host: `Unexpected role "system"` | hoisted into the top-level `system`, merged with one already there; content blocks and their `cache_control` survive |
+| `output_config: {effort: "xhigh"}` | Anthropic: `This model does not support the effort parameter` | `effort` stripped (top level, inside `thinking`, and inside `output_config`); the rest of `output_config` is kept |
 
 > **Caveat:** leave `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1` set. Without it Claude Code sends
 > beta-gated fields with an `anthropic-beta` header, and the gateway does not forward client
@@ -352,8 +353,8 @@ problems only — including the startup route dump, which is `info`.
 
 | tag | base | size | |
 |---|---|---|---|
-| `:latest`, `:v0.1.7` | `debian:bookworm-slim` | 116 MB | has curl → `HEALTHCHECK`, `docker exec` works; uid 10001 |
-| `:latest-distroless`, `:v0.1.7-distroless` | `gcr.io/distroless/cc-debian12` | **40 MB** | no shell, no package manager, nothing to exec into; uid 65532 |
+| `:latest`, `:v0.1.8` | `debian:bookworm-slim` | 116 MB | has curl → `HEALTHCHECK`, `docker exec` works; uid 10001 |
+| `:latest-distroless`, `:v0.1.8-distroless` | `gcr.io/distroless/cc-debian12` | **40 MB** | no shell, no package manager, nothing to exec into; uid 65532 |
 
 ```bash
 curl -fsSL …/quickstart.sh | IMAGE=docker.io/dylandylandy/dy:latest-distroless bash
@@ -376,7 +377,7 @@ quickstart.sh status                 # container state, /health, alias list
 quickstart.sh logs                   # follow; one line per request from the observer hook
 quickstart.sh restart
 quickstart.sh down
-IMAGE=docker.io/dylandylandy/dy:v0.1.7 quickstart.sh up    # pin a version
+IMAGE=docker.io/dylandylandy/dy:v0.1.8 quickstart.sh up    # pin a version
 ```
 
 Routes live in `~/.ai-gateway/gateway.config.yml` (mounted read-only at `/etc/gateway/config.yml`),
@@ -398,7 +399,7 @@ credentials in `~/.ai-gateway/.env`. Both are re-read on `up`.
 | `no conversion path for surface=…` | that surface × dialect pair isn't implemented (see §5) |
 | `400 context_management` | Claude Code without `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1` — see §7 |
 | `400 … Extra inputs are not permitted` | a field the host schema doesn't know. Bedrock/Vertex are filtered to their invoke schema; native Anthropic forwards everything |
-| `400 thinking: Input tag 'adaptive'…` or `400 Unexpected role "system"` | fixed in v0.1.7 — upgrade (`quickstart.sh` pulls `:latest`) |
+| `400 thinking: Input tag 'adaptive'…` or `400 Unexpected role "system"` | fixed in v0.1.8 — upgrade (`quickstart.sh` pulls `:latest`) |
 | `statfs … no such file` on start | VM-backed engine can't mount that path — keep `AI_GATEWAY_HOME` under `$HOME` |
 | `port is already allocated` | something else owns it — `PORT=8001 quickstart.sh up`, then update your client's `base_url` to match |
 | everything 000 / connection refused | `quickstart.sh status`, then `quickstart.sh logs` |
