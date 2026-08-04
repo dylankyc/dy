@@ -169,11 +169,24 @@ providers:
 `kind` is one of `openai`, `anthropic`, `gemini`, `azure-openai`, `bedrock`, `vertex`. Any
 OpenAI-compatible endpoint (vLLM, Ollama, OpenRouter, Groq) fits `kind: openai`.
 
+For Bedrock, `wire_id` takes either a plain model id or a full **ARN** — inference profiles,
+provisioned throughput, custom models:
+
+```yaml
+- alias: opus
+  wire_id: "arn:aws:bedrock:us-east-1::inference-profile/us.anthropic.claude-opus-4-8"
+```
+
+> Newer Claude models drop parameters older ones accept. `claude-opus-4-8`, for instance, answers
+> ``400 `temperature` is deprecated for this model`` — so an OpenAI-style client that always sends
+> `temperature` will fail against it while working fine against `claude-haiku-4-5`. That is the
+> provider's rule, not the gateway's; pick a model your clients' parameters suit.
+
 ---
 
 ## 5. What works where
 
-Measured against `dylandylandy/dy:v0.1.8`. Rows are the surface your *client* speaks, columns the
+Measured against `dylandylandy/dy:v0.1.9`. Rows are the surface your *client* speaks, columns the
 provider behind the alias:
 
 | surface | OpenAI (`fast`) | Anthropic (`claude`) | Bedrock (`bedrock-claude`) | Gemini (`gemini`) |
@@ -353,8 +366,8 @@ problems only — including the startup route dump, which is `info`.
 
 | tag | base | size | |
 |---|---|---|---|
-| `:latest`, `:v0.1.8` | `debian:bookworm-slim` | 116 MB | has curl → `HEALTHCHECK`, `docker exec` works; uid 10001 |
-| `:latest-distroless`, `:v0.1.8-distroless` | `gcr.io/distroless/cc-debian12` | **40 MB** | no shell, no package manager, nothing to exec into; uid 65532 |
+| `:latest`, `:v0.1.9` | `debian:bookworm-slim` | 116 MB | has curl → `HEALTHCHECK`, `docker exec` works; uid 10001 |
+| `:latest-distroless`, `:v0.1.9-distroless` | `gcr.io/distroless/cc-debian12` | **40 MB** | no shell, no package manager, nothing to exec into; uid 65532 |
 
 ```bash
 curl -fsSL …/quickstart.sh | IMAGE=docker.io/dylandylandy/dy:latest-distroless bash
@@ -377,7 +390,7 @@ quickstart.sh status                 # container state, /health, alias list
 quickstart.sh logs                   # follow; one line per request from the observer hook
 quickstart.sh restart
 quickstart.sh down
-IMAGE=docker.io/dylandylandy/dy:v0.1.8 quickstart.sh up    # pin a version
+IMAGE=docker.io/dylandylandy/dy:v0.1.9 quickstart.sh up    # pin a version
 ```
 
 Routes live in `~/.ai-gateway/gateway.config.yml` (mounted read-only at `/etc/gateway/config.yml`),
@@ -400,6 +413,8 @@ credentials in `~/.ai-gateway/.env`. Both are re-read on `up`.
 | `400 context_management` | Claude Code without `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1` — see §7 |
 | `400 … Extra inputs are not permitted` | a field the host schema doesn't know. Bedrock/Vertex are filtered to their invoke schema; native Anthropic forwards everything |
 | `400 thinking: Input tag 'adaptive'…` or `400 Unexpected role "system"` | fixed in v0.1.8 — upgrade (`quickstart.sh` pulls `:latest`) |
+| `UnknownOperationException` from Bedrock (with a **200**) | an ARN `wire_id` whose `/` was splitting the URL path — fixed in v0.1.9 |
+| ``400 `temperature` is deprecated for this model`` | that model dropped the parameter; the client still sends it. Use a model that accepts it, or stop sending it |
 | `statfs … no such file` on start | VM-backed engine can't mount that path — keep `AI_GATEWAY_HOME` under `$HOME` |
 | `port is already allocated` | something else owns it — `PORT=8001 quickstart.sh up`, then update your client's `base_url` to match |
 | everything 000 / connection refused | `quickstart.sh status`, then `quickstart.sh logs` |
