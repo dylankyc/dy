@@ -8,6 +8,8 @@
 # This file is mirrored to github.com/dylankyc/dy (the curl-able copy) from
 # deploy/ai-gateway/quickstart.sh in the gateway repo. Keep them identical.
 #
+#   LOG_LEVEL=debug … | bash            # error|warn|info|debug|trace (RUST_LOG also honoured)
+#
 # What it does, and nothing else:
 #   1. finds a container engine (docker, else podman);
 #   2. materialises  $AI_GATEWAY_HOME/gateway.config.yml  (routes)  and  .env  (credentials);
@@ -25,6 +27,8 @@ PORT=${PORT:-8000}
 # provider credits. Put it on the network only when you mean to: BIND=0.0.0.0 …/quickstart.sh
 BIND=${BIND:-127.0.0.1}
 NAME=${NAME:-ai-gateway}
+# Verbosity: error|warn|info|debug|trace. RUST_LOG (full filter syntax) outranks it if exported.
+LOG_LEVEL=${LOG_LEVEL:-info}
 RAW_BASE=${RAW_BASE:-https://raw.githubusercontent.com/dylankyc/dy/main}
 BASE=${BASE:-http://127.0.0.1:$PORT}
 CMD=${1:-up}
@@ -290,6 +294,8 @@ up() {
   if ! err=$($ENGINE run -d --name "$NAME" \
     -p "$BIND:$PORT:8000" \
     --env-file "$GW_HOME/.env" \
+    -e "LOG_LEVEL=$LOG_LEVEL" \
+    ${RUST_LOG:+-e "RUST_LOG=$RUST_LOG"} \
     -v "$GW_HOME/gateway.config.yml:/etc/gateway/config.yml:$MOUNT_OPT" \
     --restart unless-stopped \
     "$IMAGE" 2>&1); then
@@ -309,9 +315,11 @@ up() {
     $ENGINE logs "$NAME" 2>&1 | tail -20 >&2
     exit 1
   fi
-  ok "gateway   $BASE  (container \"$NAME\")"
+  ok "gateway   $BASE  (container \"$NAME\", log level $LOG_LEVEL)"
   say ""
   say "  models:  $(models_list)"
+  say ""
+  say "  ${B}routes${Z}   $SELF logs   — every alias and its failover chain is logged at startup"
   say ""
   say "  ${B}try it${Z}"
   say "    curl $BASE/v1/chat/completions -H 'content-type: application/json' \\"

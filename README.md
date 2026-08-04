@@ -66,7 +66,8 @@ less quickstart.sh && bash quickstart.sh
 | `PORT` | `8000` | host port |
 | `BIND` | `127.0.0.1` | **loopback on purpose** — see [Security](#security) |
 | `AI_GATEWAY_HOME` | `~/.ai-gateway` | where config + credentials live |
-| `IMAGE` | `docker.io/dylandylandy/dy:latest` | pin a tag for reproducibility |
+| `LOG_LEVEL` | `info` | `error`\|`warn`\|`info`\|`debug`\|`trace` (see [Logging](#9-logging)) |
+| `IMAGE` | `docker.io/dylandylandy/dy:latest` | pin a tag, or use `:latest-distroless` |
 | `ENGINE` | auto | force `docker` or `podman` |
 
 ---
@@ -172,7 +173,7 @@ OpenAI-compatible endpoint (vLLM, Ollama, OpenRouter, Groq) fits `kind: openai`.
 
 ## 5. What works where
 
-Measured against `dylandylandy/dy:v0.1.3`. Rows are the surface your *client* speaks, columns the
+Measured against `dylandylandy/dy:v0.1.4`. Rows are the surface your *client* speaks, columns the
 provider behind the alias:
 
 | surface | OpenAI (`fast`) | Anthropic (`claude`) | Gemini (`gemini`) |
@@ -282,14 +283,80 @@ installs one, so anyone who can reach the port can spend your provider credits.
 
 ---
 
-## 9. Operations
+## 9. Logging
+
+On startup the gateway logs **every route it serves** — alias, failover chain, the wire id each
+one resolves to, and the dialect/envelope pairing. `quickstart.sh logs` answers "what does this
+thing actually serve?" without sending a request:
+
+```
+INFO llm-gateway listening on 0.0.0.0:8000 (log level: info)
+INFO surfaces:
+INFO   POST /v1/chat/completions   POST /v1/messages   POST /v1/responses
+INFO   GET  /v1/models             GET  /health
+INFO routes: 12 aliases
+INFO   fast               → openai:fast              gpt-4o-mini [OpenAi/OpenAiNative] max_output_tokens=16384
+INFO   gpt-4o             → openai:gpt-4o            gpt-4o [OpenAi/OpenAiNative] max_output_tokens=16384
+INFO   claude             → anthropic:claude         claude-haiku-4-5-20251001 [Anthropic/AnthropicNative]
+INFO                      ↳ bedrock:claude           us.anthropic.claude-haiku-4-5-… [Anthropic/Bedrock] (failover)
+INFO   gemini             → gemini:gemini            gemini-2.5-flash [Gemini/Gemini]
+INFO   azure              → azure:azure              gpt-4o-mini [OpenAi/AzureOpenAi] max_output_tokens=16384
+```
+
+Then one line per request: `[ok] principal=anonymous model=fast provider=openai latency=1.2s`.
+
+Pick the verbosity — first source that is set wins:
+
+| source | example | |
+|---|---|---|
+| `RUST_LOG` | `RUST_LOG=llm_gateway=debug,warn` | full filter syntax, per-target |
+| `LOG_LEVEL` | `LOG_LEVEL=debug` | the simple knob |
+| `server.log_level` in `gateway.config.yml` | `log_level: info` | a deployment's default |
+| — | `info` | built in |
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/dylankyc/dy/main/quickstart.sh | LOG_LEVEL=debug bash
+```
+
+`debug` adds the HTTP client's own tracing (connection reuse, TLS, retries); `warn` reduces it to
+problems only — including the startup route dump, which is `info`.
+
+> A bare word that isn't a level (`LOG_LEVEL=inof`) is **rejected with a warning**, not handed to
+> the filter parser: `RUST_LOG` syntax reads an unknown word as a *target* name, which would
+> silently disable every log line — the exact opposite of what you wanted when you turned logging
+> up.
+
+---
+
+## 10. Image variants
+
+| tag | base | size | |
+|---|---|---|---|
+| `:latest`, `:v0.1.4` | `debian:bookworm-slim` | 116 MB | has curl → `HEALTHCHECK`, `docker exec` works; uid 10001 |
+| `:latest-distroless`, `:v0.1.4-distroless` | `gcr.io/distroless/cc-debian12` | **40 MB** | no shell, no package manager, nothing to exec into; uid 65532 |
+
+```bash
+curl -fsSL …/quickstart.sh | IMAGE=docker.io/dylandylandy/dy:latest-distroless bash
+```
+
+The distroless image has no `HEALTHCHECK` — there is no curl or shell to run one. Kubernetes and
+Nomad do their own HTTP probes, so this only matters for bare `docker run`:
+
+```yaml
+livenessProbe:
+  httpGet: { path: /health, port: 8000 }
+```
+
+---
+
+## 11. Operations
 
 ```bash
 quickstart.sh status                 # container state, /health, alias list
 quickstart.sh logs                   # follow; one line per request from the observer hook
 quickstart.sh restart
 quickstart.sh down
-IMAGE=docker.io/dylandylandy/dy:v0.1.3 quickstart.sh up    # pin a version
+IMAGE=docker.io/dylandylandy/dy:v0.1.4 quickstart.sh up    # pin a version
 ```
 
 Routes live in `~/.ai-gateway/gateway.config.yml` (mounted read-only at `/etc/gateway/config.yml`),
@@ -297,7 +364,7 @@ credentials in `~/.ai-gateway/.env`. Both are re-read on `up`.
 
 ---
 
-## 10. Troubleshooting
+## 12. Troubleshooting
 
 | symptom | cause / fix |
 |---|---|

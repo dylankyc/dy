@@ -9,6 +9,10 @@
 server:
   # Container-side bind; compose publishes it on the host as :18085.
   listen: "0.0.0.0:8000"
+  # Verbosity: error | warn | info | debug | trace, or RUST_LOG filter syntax
+  # ("llm_gateway=debug,warn"). Lowest precedence — LOG_LEVEL and RUST_LOG in the environment
+  # both override it, so you can turn logging up on a running container without editing this file.
+  log_level: info
 
 providers:
   # ── OpenAI (native, Bearer) ────────────────────────────────────────────────
