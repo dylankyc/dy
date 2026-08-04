@@ -64,7 +64,7 @@ less quickstart.sh && bash quickstart.sh
 | variable | default | |
 |---|---|---|
 | `PORT` | `8080` | host port |
-| `BIND` | `127.0.0.1` | **loopback on purpose** — see [Security](#8-security) |
+| `BIND` | `127.0.0.1` | **loopback on purpose** — see [Security](#security) |
 | `AI_GATEWAY_HOME` | `~/.ai-gateway` | where config + credentials live |
 | `IMAGE` | `docker.io/dylandylandy/dy:latest` | pin a tag for reproducibility |
 | `ENGINE` | auto | force `docker` or `podman` |
