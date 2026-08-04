@@ -147,9 +147,20 @@ An alias is what your client sends; `wire_id` is what the provider is asked for.
 
 Two things worth knowing:
 
-- **`claude` is a pool.** It is registered under both Anthropic and Bedrock, so it resolves to the
-  ordered list `[anthropic:claude, bedrock:claude]` — if Anthropic errors, the same request is
-  retried against Bedrock, across providers *and* dialects.
+- **`claude` is a pool.** It is registered under both Anthropic and Bedrock, so it resolves to
+  `[anthropic:claude, bedrock:claude]` — one alias, two hosts, two dialects.
+
+  ```yaml
+  server:
+    load_balance: round-robin   # or: failover (default)
+  ```
+
+  `failover` is a strict primary/secondary: the first target serves everything while it is
+  healthy, and the rest exist for when it isn't. `round-robin` rotates the starting point per
+  request, so traffic spreads across every target of the alias. Failover is the default because
+  providers differ in price, quota and latency — spreading traffic across them is your call, not
+  the gateway's. **Either way** a retryable error still walks the remaining targets: rotation
+  changes where the walk starts, never that it happens.
 - **`max_output_tokens` clamps.** A client sized for Claude (32k) talking to `gpt-4o-mini`
   (16384 cap) would 400; the alias's `max_output_tokens` clamps it instead.
 
@@ -186,7 +197,7 @@ provisioned throughput, custom models:
 
 ## 5. What works where
 
-Measured against `dylandylandy/dy:v0.1.10`. Rows are the surface your *client* speaks, columns the
+Measured against `dylandylandy/dy:v0.1.11`. Rows are the surface your *client* speaks, columns the
 provider behind the alias:
 
 | surface | OpenAI (`fast`) | Anthropic (`claude`) | Bedrock (`bedrock-claude`) | Gemini (`gemini`) |
@@ -367,8 +378,8 @@ problems only — including the startup route dump, which is `info`.
 
 | tag | base | size | |
 |---|---|---|---|
-| `:latest`, `:v0.1.10` | `debian:bookworm-slim` | 116 MB | has curl → `HEALTHCHECK`, `docker exec` works; uid 10001 |
-| `:latest-distroless`, `:v0.1.10-distroless` | `gcr.io/distroless/cc-debian12` | **40 MB** | no shell, no package manager, nothing to exec into; uid 65532 |
+| `:latest`, `:v0.1.11` | `debian:bookworm-slim` | 116 MB | has curl → `HEALTHCHECK`, `docker exec` works; uid 10001 |
+| `:latest-distroless`, `:v0.1.11-distroless` | `gcr.io/distroless/cc-debian12` | **40 MB** | no shell, no package manager, nothing to exec into; uid 65532 |
 
 ```bash
 curl -fsSL …/quickstart.sh | IMAGE=docker.io/dylandylandy/dy:latest-distroless bash
@@ -391,7 +402,7 @@ quickstart.sh status                 # container state, /health, alias list
 quickstart.sh logs                   # follow; one line per request from the observer hook
 quickstart.sh restart
 quickstart.sh down
-IMAGE=docker.io/dylandylandy/dy:v0.1.10 quickstart.sh up    # pin a version
+IMAGE=docker.io/dylandylandy/dy:v0.1.11 quickstart.sh up    # pin a version
 ```
 
 Routes live in `~/.ai-gateway/gateway.config.yml` (mounted read-only at `/etc/gateway/config.yml`),

@@ -13,6 +13,13 @@ server:
   # ("llm_gateway=debug,warn"). Lowest precedence — LOG_LEVEL and RUST_LOG in the environment
   # both override it, so you can turn logging up on a running container without editing this file.
   log_level: info
+  # How an alias with more than one target picks where to start:
+  #   failover     (default) strict primary/secondary — the first leg serves everything while healthy
+  #   round-robin  spread requests across every target of the alias
+  # Either way a retryable error still walks the rest of the list, so balancing never costs
+  # failover. `claude` below is registered under both anthropic and bedrock, so it is the pool
+  # this applies to.
+  load_balance: round-robin
 
 providers:
   # ── OpenAI (native, Bearer) ────────────────────────────────────────────────
@@ -54,9 +61,15 @@ providers:
     region: us-east-1
     models:
       - alias: claude
-        wire_id: "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+        #wire_id: "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+        wire_id: "us.anthropic.claude-sonnet-4-20250514-v1:0"
       - alias: bedrock-claude
-        wire_id: "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+        #wire_id: "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+        # ERROR
+        #wire_id: "anthropic.claude-sonnet-4-20250514-v1:0"
+        #wire_id: "us.anthropic.claude-sonnet-4-20250514-v1:0"
+        wire_id: "arn:aws:bedrock:us-east-1::inference-profile/us.anthropic.claude-opus-4-8"
+        #wire_id: "arn:aws:bedrock:us-east-1::inference-profile/us.anthropic.claude-sonnet-4-6"
 
   # ── Gemini (native, x-goog-api-key, model in the URL) — transcoded from OpenAI ─
   - kind: gemini
