@@ -1,0 +1,75 @@
+# AI Gateway (ffc/llm-gateway) — real multi-provider config with model aliases.
+#
+# One OpenAI-compatible surface (POST /v1/chat/completions) fans out to five real providers.
+# Clients always send an OpenAI request; the gateway transcodes per target dialect and signs
+# per target envelope (doc/0172). Secrets are read from the named env vars at build time — never
+# stored here; gen-secrets.sh materialises them into .env from ~/.secret and ~/.aws/credentials,
+# and docker-compose.yml injects them into the container.
+
+server:
+  # Container-side bind; compose publishes it on the host as :18085.
+  listen: "0.0.0.0:8080"
+
+providers:
+  # ── OpenAI (native, Bearer) ────────────────────────────────────────────────
+  - kind: openai
+    name: openai
+    api_key_env: OPENAI_API_KEY
+    models:
+      # max_output_tokens clamps a client's max_tokens on cross-adapter transcodes: Claude Code
+      # (Anthropic surface) sizes max_tokens for a Claude model (32k), but gpt-4o* caps at 16384.
+      - alias: fast                # client sends model:"fast"
+        wire_id: gpt-4o-mini       # → OpenAI /v1/chat/completions (or /v1/responses)
+        max_output_tokens: 16384
+      # Pass-through aliases (alias == wire id) so OpenAI-native clients (e.g. Codex, which uses
+      # wire_api="responses") can send the real model name and reach OpenAI unchanged.
+      - { alias: gpt-4o-mini,        wire_id: gpt-4o-mini, max_output_tokens: 16384 }
+      - { alias: gpt-4o,             wire_id: gpt-4o,      max_output_tokens: 16384 }
+      - { alias: gpt-5-mini,         wire_id: gpt-5-mini }
+      - { alias: gpt-5,              wire_id: gpt-5 }
+      - { alias: gpt-5.1,            wire_id: gpt-5.1 }
+      - { alias: gpt-5.1-codex,      wire_id: gpt-5.1-codex }
+      - { alias: gpt-5.1-codex-mini, wire_id: gpt-5.1-codex-mini }
+
+  # ── Anthropic (native, x-api-key) — PRIMARY for the "claude" alias ─────────
+  - kind: anthropic
+    name: anthropic
+    api_key_env: ANTHROPIC_API_KEY
+    models:
+      # shared alias → failover pool (anthropic, then bedrock)
+      # transcode OpenAI→Anthropic → api.anthropic.com/v1/messages
+      - alias: claude
+        wire_id: claude-haiku-4-5-20251001
+
+  # ── Bedrock (Claude via SigV4) — SECONDARY for "claude", plus a direct alias ─
+  # Same `claude` alias registered here too → routes["claude"] = [anthropic:claude,
+  # bedrock:claude], so a client model:"claude" fails over from Anthropic to Bedrock.
+  # `bedrock-claude` addresses it directly (exercises SigV4 signing through the gateway).
+  - kind: bedrock
+    name: bedrock
+    region: us-east-1
+    models:
+      - alias: claude
+        wire_id: "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+      - alias: bedrock-claude
+        wire_id: "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+
+  # ── Gemini (native, x-goog-api-key, model in the URL) — transcoded from OpenAI ─
+  - kind: gemini
+    name: gemini
+    api_key_env: GEMINI_API_KEY
+    models:
+      # transcode OpenAI→Gemini → …/models/gemini-2.5-flash:generateContent
+      - alias: gemini
+        wire_id: gemini-2.5-flash
+
+  # ── Azure OpenAI (deployment-addressed, Bearer + api-version) ──────────────
+  - kind: azure-openai
+    name: azure
+    endpoint_env: AZURE_ENDPOINT     # e.g. https://<resource>.openai.azure.com
+    api_key_env: AZURE_API_KEY
+    api_version: "2025-01-01-preview"
+    models:
+      - alias: azure
+        wire_id: gpt-4o-mini         # the Azure *deployment* name (goes in the URL path)
+        max_output_tokens: 16384     # clamp cross-adapter max_tokens (Claude Code → Azure)

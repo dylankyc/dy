@@ -1,0 +1,3 @@
+# Never commit credentials. quickstart.sh writes .env next to itself when you run it from a
+# clone of this repo.
+.env
