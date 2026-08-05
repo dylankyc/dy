@@ -9,18 +9,34 @@
 # deploy/ai-gateway/quickstart.sh in the gateway repo. Keep them identical.
 #
 #   LOG_LEVEL=debug … | bash            # error|warn|info|debug|trace (RUST_LOG also honoured)
+#   VARIANT=debian  … | bash            # opt out of the distroless image (see VARIANT below)
 #
 # What it does, and nothing else:
 #   1. finds a container engine (docker, else podman);
 #   2. materialises  $AI_GATEWAY_HOME/gateway.config.yml  (routes)  and  .env  (credentials);
-#   3. runs docker.io/dylandylandy/dy:latest on :8000 and waits for /health.
+#   3. runs docker.io/dylandylandy/dy:latest-distroless on :8000 and waits for /health.
+#
+# The distroless image carries no HEALTHCHECK (it has no curl or shell to run one), so `status`
+# probes /health over HTTP itself rather than reading the engine's health column.
 #
 # Everything lives under $AI_GATEWAY_HOME (default ~/.ai-gateway); re-running is safe. Credentials
 # are read from your environment, else from ~/.secret/* and ~/.aws/credentials, and are written
 # only to that .env — never into the image, never into the config.
 set -eu
 
-IMAGE=${IMAGE:-docker.io/dylandylandy/dy:latest}
+# Image variant. **distroless by default**: no shell, no package manager, nothing to exec into if
+# something gets a foothold, and ~65% smaller. Opt out when you want the batteries:
+#
+#   VARIANT=debian …/quickstart.sh     # debian-slim + curl → container HEALTHCHECK, `docker exec`
+#   TAG=v0.1.12    …/quickstart.sh     # pin a version (applies to either variant)
+#   IMAGE=ghcr.io/me/mine:dev …        # bypass both and name the image outright
+VARIANT=${VARIANT:-distroless}
+TAG=${TAG:-latest}
+case "$VARIANT" in
+  distroless) IMAGE=${IMAGE:-docker.io/dylandylandy/dy:$TAG-distroless} ;;
+  debian)     IMAGE=${IMAGE:-docker.io/dylandylandy/dy:$TAG} ;;
+  *) printf 'unknown VARIANT: %s (want: distroless | debian)\n' "$VARIANT" >&2; exit 2 ;;
+esac
 PORT=${PORT:-8000}
 # Loopback by default, deliberately: the gateway does not authenticate clients (the auth hook is
 # a no-op unless a host installs one), so anything that can reach this port can spend your
@@ -315,7 +331,7 @@ up() {
     $ENGINE logs "$NAME" 2>&1 | tail -20 >&2
     exit 1
   fi
-  ok "gateway   $BASE  (container \"$NAME\", log level $LOG_LEVEL)"
+  ok "gateway   $BASE  (container \"$NAME\", $VARIANT, log level $LOG_LEVEL)"
   say ""
   say "  models:  $(models_list)"
   say ""

@@ -67,7 +67,9 @@ less quickstart.sh && bash quickstart.sh
 | `BIND` | `127.0.0.1` | **loopback on purpose** — see [Security](#security) |
 | `AI_GATEWAY_HOME` | `~/.ai-gateway` | where config + credentials live |
 | `LOG_LEVEL` | `info` | `error`\|`warn`\|`info`\|`debug`\|`trace` (see [Logging](#9-logging)) |
-| `IMAGE` | `docker.io/dylandylandy/dy:latest` | pin a tag, or use `:latest-distroless` |
+| `VARIANT` | `distroless` | `distroless` (no shell) or `debian` (curl + `HEALTHCHECK`) |
+| `TAG` | `latest` | pin a version, e.g. `v0.1.12` |
+| `IMAGE` | derived from `VARIANT`+`TAG` | name an image outright, bypassing both |
 | `ENGINE` | auto | force `docker` or `podman` |
 
 ---
@@ -197,7 +199,7 @@ provisioned throughput, custom models:
 
 ## 5. What works where
 
-Measured against `dylandylandy/dy:v0.1.11`. Rows are the surface your *client* speaks, columns the
+Measured against `dylandylandy/dy:v0.1.12`. Rows are the surface your *client* speaks, columns the
 provider behind the alias:
 
 | surface | OpenAI (`fast`) | Anthropic (`claude`) | Bedrock (`bedrock-claude`) | Gemini (`gemini`) |
@@ -378,15 +380,21 @@ problems only — including the startup route dump, which is `info`.
 
 | tag | base | size | |
 |---|---|---|---|
-| `:latest`, `:v0.1.11` | `debian:bookworm-slim` | 116 MB | has curl → `HEALTHCHECK`, `docker exec` works; uid 10001 |
-| `:latest-distroless`, `:v0.1.11-distroless` | `gcr.io/distroless/cc-debian12` | **40 MB** | no shell, no package manager, nothing to exec into; uid 65532 |
+| `:latest-distroless`, `:v0.1.12-distroless` | `gcr.io/distroless/cc-debian12` | **40 MB** | **default.** No shell, no package manager, nothing to exec into; uid 65532 |
+| `:latest`, `:v0.1.12` | `debian:bookworm-slim` | 116 MB | opt-in. Has curl → container `HEALTHCHECK`, `docker exec` works; uid 10001 |
+
+The installer uses **distroless by default** — the smaller attack surface is the better default for
+something holding your provider keys. Opt out when you want to get inside the container:
 
 ```bash
-curl -fsSL …/quickstart.sh | IMAGE=docker.io/dylandylandy/dy:latest-distroless bash
+curl -fsSL …/quickstart.sh | VARIANT=debian bash      # debian-slim + curl
+curl -fsSL …/quickstart.sh | TAG=v0.1.12 bash         # pin a version (either variant)
+curl -fsSL …/quickstart.sh | IMAGE=ghcr.io/me/x bash  # bypass both
 ```
 
-The distroless image has no `HEALTHCHECK` — there is no curl or shell to run one. Kubernetes and
-Nomad do their own HTTP probes, so this only matters for bare `docker run`:
+The distroless image has no `HEALTHCHECK` — there is no curl or shell to run one — so
+`quickstart.sh status` probes `/health` over HTTP itself instead of reading the engine's health
+column. Kubernetes and Nomad do their own HTTP probes, so this only matters for bare `docker run`:
 
 ```yaml
 livenessProbe:
@@ -402,7 +410,8 @@ quickstart.sh status                 # container state, /health, alias list
 quickstart.sh logs                   # follow; one line per request from the observer hook
 quickstart.sh restart
 quickstart.sh down
-IMAGE=docker.io/dylandylandy/dy:v0.1.11 quickstart.sh up    # pin a version
+TAG=v0.1.12 quickstart.sh up                                # pin a version
+VARIANT=debian quickstart.sh up                             # the batteries-included image
 ```
 
 Routes live in `~/.ai-gateway/gateway.config.yml` (mounted read-only at `/etc/gateway/config.yml`),

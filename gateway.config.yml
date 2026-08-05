@@ -71,6 +71,29 @@ providers:
         wire_id: "arn:aws:bedrock:us-east-1::inference-profile/us.anthropic.claude-opus-4-8"
         #wire_id: "arn:aws:bedrock:us-east-1::inference-profile/us.anthropic.claude-sonnet-4-6"
 
+  # ── Vertex AI (Claude on Google Cloud) — OAuth Bearer, model in the URL ─────
+  # NOTE: `location: global` is deliberate. For this project the regional endpoints answer
+  # "is not servable in region us-central1" (400) or 404 — only the global endpoint serves Claude
+  # (doc/0179 §2.4). VERTEX_ACCESS_TOKEN is minted from the service-account JSON by
+  # gen-secrets.sh / quickstart.sh and expires after ~1h; re-run `make up` to refresh it.
+  - kind: vertex
+    name: vertex
+    project: gcp-sdet-test
+    region: global
+    models:
+      - alias: vertex-claude
+        # tier B: adaptive *and* enabled thinking; effort high/medium/low (not max/xhigh)
+        wire_id: claude-sonnet-4-6
+        # claude-opus-5 is tier A, but this project has no access to it: every request 404s with
+        # "Publisher model …/claude-opus-5 was not found or your project does not have access".
+        # Grant access in Model Garden first, then swap the line.
+        # ERROR: 404
+        #wire_id: claude-sonnet-5
+        #wire_id: claude-opus-4-8
+        #wire_id: claude-opus-5
+      - alias: vertex-sonnet-4-5
+        wire_id: "claude-sonnet-4-5@20250929"   # tier C: adaptive is migrated back to enabled
+
   # ── Gemini (native, x-goog-api-key, model in the URL) — transcoded from OpenAI ─
   - kind: gemini
     name: gemini
