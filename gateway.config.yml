@@ -1,177 +1,185 @@
-# AI Gateway (ffc/llm-gateway) — real multi-provider config with model aliases.
+# Gateway Server (crates/gateway-server) — the Rust-native replacement for deploy/ai-gateway's
+# ffc/llm-gateway image (doc/0188/0189). Same real multi-provider fan-out, same env var names (so
+# deploy/ai-gateway's ./gen-secrets.sh output is directly reusable), different config *shape*:
+# gateway-server is a general-purpose Kong-parity gateway, so the LLM plan is one `llm:` section
+# alongside ordinary `services:`/`routes:`, not the whole file.
 #
-# One OpenAI-compatible surface (POST /v1/chat/completions) fans out to five real providers.
-# Clients always send an OpenAI request; the gateway transcodes per target dialect and signs
-# per target envelope. Secrets are read from the named env vars at build time — never
-# stored here; quickstart.sh materialises them into .env from your environment, ~/.secret and
-# ~/.aws/credentials, and the container reads them at start-up.
+# Credentials are `{vault://env/VAR}` references — resolved by gateway-server's own vault manager
+# (the same `env` backend Kong's `{vault://env/...}` syntax uses), never stored here as literals.
 
-server:
-  # Container-side bind; compose publishes it on the host as :18085.
-  listen: "0.0.0.0:8000"
-  # Verbosity: error | warn | info | debug | trace, or RUST_LOG filter syntax
-  # ("llm_gateway=debug,warn"). Lowest precedence — LOG_LEVEL and RUST_LOG in the environment
-  # both override it, so you can turn logging up on a running container without editing this file.
-  log_level: info
-  # How long the gateway remembers which backend minted a resource id (resp_…, file-…, batch_…).
-  # Resource routes (/v1/responses/{id}, …/cancel) have no model in them: they are routed by that
-  # binding, so this is how long a poll or a `previous_response_id` chain stays routable.
-  resource_ttl: 24h
-  # How an alias with more than one target picks where to start:
-  #   failover     (default) strict primary/secondary — the first leg serves everything while healthy
-  #   round-robin  spread requests across every target of the alias
-  # Either way a retryable error still walks the rest of the list, so balancing never costs
-  # failover. `claude` below is registered under both anthropic and bedrock, so it is the pool
-  # this applies to.
+llm:
+  # How an alias with more than one target picks where to start — every target is still tried on
+  # a retryable error regardless (doc/0188 §5.3). `claude` below is registered under both
+  # anthropic and bedrock, so it is the pool this applies to.
   load_balance: round-robin
+  providers:
+    # ── OpenAI (native, Bearer) ────────────────────────────────────────────
+    # Full alias set merged from deploy/ai-gateway/gateway.config.yml (its only active lines —
+    # its commented-out alternates are not carried over). Capability-tagged aliases
+    # (audio/speech, batches, realtime, image) are declared for parity but have no HTTP route
+    # yet — no `llm_surface` maps to those capabilities in this config's `services:` section
+    # below, so they resolve but are currently unreachable (doc/0189 §1.2's "not built" list).
+    - kind: openai
+      name: openai
+      credential_ref: "{vault://env/OPENAI_API_KEY}"
+      models:
+        - alias: codex
+          wire_id: gpt-5.3-codex
+        - alias: embed
+          wire_id: text-embedding-3-small
+          capability: embeddings
+        - alias: tts
+          wire_id: gpt-4o-mini-tts
+          capability: audio/speech
+        - alias: batch
+          wire_id: gpt-4o-mini
+          capability: batches
+        - alias: voice
+          wire_id: gpt-realtime
+          capability: realtime
+        - alias: image
+          wire_id: gpt-image-1
+          capability: image
+        - alias: moderate
+          wire_id: omni-moderation-latest
+          capability: moderation
+        # max_output_tokens clamps a client-requested max_tokens on cross-adapter transcodes.
+        - alias: fast
+          wire_id: gpt-4o-mini
+          max_output_tokens: 16384
+        # Pass-through aliases (alias == wire id) so an OpenAI-native client (e.g. Codex, which
+        # defaults to wire_api="responses") can send the real model name and reach OpenAI
+        # unchanged. `openai.gpt-5.6-sol` is distinct from the `codex` alias below
+        # (bedrock-mantle), which Codex only reaches by explicit alias, not this id.
+        - alias: gpt-4o-mini
+          wire_id: gpt-4o-mini
+          max_output_tokens: 16384
+        - alias: gpt-4o
+          wire_id: gpt-4o
+          max_output_tokens: 16384
+        - alias: gpt-5-mini
+          wire_id: gpt-5-mini
+        - alias: gpt-5
+          wire_id: gpt-5
+        - alias: gpt-5.1
+          wire_id: gpt-5.1
+        - alias: gpt-5.1-codex
+          wire_id: gpt-5.1-codex
+        - alias: gpt-5.1-codex-mini
+          wire_id: gpt-5.1-codex-mini
+        - alias: openai.gpt-5.6-sol
+          wire_id: gpt-5.6-sol
 
-providers:
-  # ── OpenAI (native, Bearer) ────────────────────────────────────────────────
-  - kind: openai
-    name: openai
-    api_key_env: OPENAI_API_KEY
-    models:
-      # Non-chat capabilities are declared, so /v1/embeddings and /v1/moderations route to the
-      # right alias and a chat alias on those paths is a gateway 404 with a reason.
-      # Second leg of the `codex` pool. Bedrock Mantle is the primary (below); this one takes over
-      # when its short-lived Bedrock API key expires — a credential failure fails over, it does not
-      # kill the request. Note the two legs cannot share encrypted reasoning state, so a conversation
-      # that crosses them loses its prior chain-of-thought (the gateway drops it and says so).
-      - { alias: codex,    wire_id: gpt-5.3-codex }
-      - { alias: embed,    wire_id: text-embedding-3-small, capability: embeddings }
-      - { alias: tts,      wire_id: gpt-4o-mini-tts,        capability: audio/speech }
-      - { alias: batch,    wire_id: gpt-4o-mini,            capability: batches }
-      - { alias: voice,    wire_id: gpt-realtime,           capability: realtime }
-      - { alias: image,    wire_id: gpt-image-1,            capability: image }
-      - { alias: moderate, wire_id: omni-moderation-latest, capability: moderation }
-      # max_output_tokens clamps a client's max_tokens on cross-adapter transcodes: Claude Code
-      # (Anthropic surface) sizes max_tokens for a Claude model (32k), but gpt-4o* caps at 16384.
-      - alias: fast                # client sends model:"fast"
-        wire_id: gpt-4o-mini       # → OpenAI /v1/chat/completions (or /v1/responses)
-        max_output_tokens: 16384
-      # Pass-through aliases (alias == wire id) so OpenAI-native clients (e.g. Codex, which uses
-      # wire_api="responses") can send the real model name and reach OpenAI unchanged.
-      - { alias: gpt-4o-mini,        wire_id: gpt-4o-mini, max_output_tokens: 16384 }
-      - { alias: gpt-4o,             wire_id: gpt-4o,      max_output_tokens: 16384 }
-      - { alias: gpt-5-mini,         wire_id: gpt-5-mini }
-      - { alias: gpt-5,              wire_id: gpt-5 }
-      - { alias: gpt-5.1,            wire_id: gpt-5.1 }
-      - { alias: gpt-5.1-codex,      wire_id: gpt-5.1-codex }
-      - { alias: gpt-5.1-codex-mini, wire_id: gpt-5.1-codex-mini }
-      - { alias: openai.gpt-5.6-sol, wire_id: gpt-5.6-sol }
+    # ── Anthropic (native, x-api-key) — PRIMARY for the "claude" alias ─────
+    - kind: anthropic
+      name: anthropic
+      credential_ref: "{vault://env/ANTHROPIC_API_KEY}"
+      models:
+        - alias: claude
+          wire_id: claude-haiku-4-5-20251001
 
+    # ── Bedrock (Claude via SigV4) — SECONDARY for "claude", plus a direct alias ─
+    # `region` has no env-var indirection in this config shape (unlike `credential_ref`) — it
+    # must match whatever AWS_REGION the SigV4 credentials in .env were minted for. Wire ids
+    # match deploy/ai-gateway/gateway.config.yml's active (uncommented) lines.
+    - kind: bedrock
+      name: bedrock
+      region: us-east-1
+      models:
+        - alias: claude
+          wire_id: "us.anthropic.claude-sonnet-4-20250514-v1:0"
+        - alias: bedrock-claude
+          wire_id: "arn:aws:bedrock:us-east-1::inference-profile/us.anthropic.claude-opus-4-8"
 
-  # ── Anthropic (native, x-api-key) — PRIMARY for the "claude" alias ─────────
-  - kind: anthropic
-    name: anthropic
-    api_key_env: ANTHROPIC_API_KEY
-    models:
-      # shared alias → failover pool (anthropic, then bedrock)
-      # transcode OpenAI→Anthropic → api.anthropic.com/v1/messages
-      - alias: claude
-        wire_id: claude-haiku-4-5-20251001
+    # ── Vertex AI (Claude on Google Cloud) — OAuth Bearer, model in the URL ─
+    - kind: vertex
+      name: vertex
+      project: gcp-sdet-test
+      region: global
+      models:
+        - alias: vertex-claude
+          wire_id: claude-sonnet-4-6
+        - alias: vertex-sonnet-4-5
+          wire_id: "claude-sonnet-4-5@20250929"
 
-  # ── Bedrock (Claude via SigV4) — SECONDARY for "claude", plus a direct alias ─
-  # Same `claude` alias registered here too → routes["claude"] = [anthropic:claude,
-  # bedrock:claude], so a client model:"claude" fails over from Anthropic to Bedrock.
-  # `bedrock-claude` addresses it directly (exercises SigV4 signing through the gateway).
-  - kind: bedrock
-    name: bedrock
-    region: us-east-1
-    models:
-      - alias: claude
-        #wire_id: "us.anthropic.claude-haiku-4-5-20251001-v1:0"
-        wire_id: "us.anthropic.claude-sonnet-4-20250514-v1:0"
-      - alias: bedrock-claude
-        #wire_id: "us.anthropic.claude-haiku-4-5-20251001-v1:0"
-        # ERROR
-        #wire_id: "anthropic.claude-sonnet-4-20250514-v1:0"
-        #wire_id: "us.anthropic.claude-sonnet-4-20250514-v1:0"
-        wire_id: "arn:aws:bedrock:us-east-1::inference-profile/us.anthropic.claude-opus-4-8"
-        #wire_id: "arn:aws:bedrock:us-east-1::inference-profile/us.anthropic.claude-sonnet-4-6"
+    # ── Gemini (native, x-goog-api-key, model in the URL) ──────────────────
+    - kind: gemini
+      name: gemini
+      credential_ref: "{vault://env/GEMINI_API_KEY}"
+      models:
+        - alias: gemini
+          wire_id: gemini-2.5-flash
 
-  # ── Vertex AI (Claude on Google Cloud) — OAuth Bearer, model in the URL ─────
-  # NOTE: `location: global` is deliberate. For this project the regional endpoints answer
-  # "is not servable in region us-central1" (400) or 404 — only the global endpoint serves Claude
-  #. VERTEX_ACCESS_TOKEN is minted from the service-account JSON by
-  # gen-secrets.sh / quickstart.sh and expires after ~1h; re-run `make up` to refresh it.
-  - kind: vertex
-    name: vertex
-    project: your-gcp-project     # ← your GCP project
-    region: global
-    models:
-      - alias: vertex-claude
-        # tier B: adaptive *and* enabled thinking; effort high/medium/low (not max/xhigh)
-        wire_id: claude-sonnet-4-6
-        # claude-opus-5 is tier A, but this project has no access to it: every request 404s with
-        # "Publisher model …/claude-opus-5 was not found or your project does not have access".
-        # Grant access in Model Garden first, then swap the line.
-        # ERROR: 404
-        #wire_id: claude-sonnet-5
-        #wire_id: claude-opus-4-8
-        #wire_id: claude-opus-5
-      - alias: vertex-sonnet-4-5
-        wire_id: "claude-sonnet-4-5@20250929"   # tier C: adaptive is migrated back to enabled
+    # ── Azure OpenAI (deployment-addressed, Bearer + api-version) ──────────
+    - kind: azure-openai
+      name: azure
+      # `endpoint`, like `region` above, is a literal — override by editing this file, not env.
+      endpoint: "https://ai-gw-sdet-e2e-test.openai.azure.com"
+      credential_ref: "{vault://env/AZURE_API_KEY}"
+      api_version: "2025-01-01-preview"
+      models:
+        - alias: azure
+          wire_id: gpt-4o-mini
+          max_output_tokens: 16384
 
-  # ── Gemini (native, x-goog-api-key, model in the URL) — transcoded from OpenAI ─
-  - kind: gemini
-    name: gemini
-    api_key_env: GEMINI_API_KEY
-    models:
-      # transcode OpenAI→Gemini → …/models/gemini-2.5-flash:generateContent
-      - alias: gemini
-        wire_id: gemini-2.5-flash
+    # ── Azure AI Foundry (Claude on Azure — Anthropic Messages, x-api-key) ──
+    - kind: azure-foundry
+      name: azure-foundry
+      endpoint: "https://claude-sonnet-4-5-eastus2.services.ai.azure.com"
+      credential_ref: "{vault://env/AZURE_FOUNDRY_API_KEY}"
+      models:
+        - alias: azure-claude
+          wire_id: claude-sonnet-4-5-foundry
 
-  # ── Azure OpenAI (deployment-addressed, Bearer + api-version) ──────────────
-  - kind: azure-openai
-    name: azure
-    endpoint_env: AZURE_ENDPOINT     # e.g. https://<resource>.openai.azure.com
-    api_key_env: AZURE_API_KEY
-    api_version: "2025-01-01-preview"
-    models:
-      - alias: azure
-        wire_id: gpt-4o-mini         # the Azure *deployment* name (goes in the URL path)
-        max_output_tokens: 16384     # clamp cross-adapter max_tokens (Claude Code → Azure)
+    # ── Bedrock Mantle (OpenAI's own models on AWS — Responses API only) ───
+    - kind: bedrock-mantle
+      name: bedrock-mantle
+      region: us-east-1
+      credential_ref: "{vault://env/AWS_BEARER_TOKEN_BEDROCK}"
+      models:
+        - alias: codex                       # what Codex CLI points at
+          wire_id: openai.gpt-5.6-sol
+        - alias: gpt-5.6-sol
+          wire_id: openai.gpt-5.6-sol
+        - alias: gpt-5.6-terra
+          wire_id: openai.gpt-5.6-terra
+        - alias: gpt-5.6-luna
+          wire_id: openai.gpt-5.6-luna
 
-  # ── Azure AI Foundry (Claude on Azure — Anthropic Messages, x-api-key) ─────  # Same cloud as `azure-openai` above, different protocol: Foundry re-hosts *Anthropic's* API at
-  # …/anthropic/v1/messages, so this pairs the Anthropic dialect with the Foundry envelope and an
-  # Anthropic-surface client (Claude Code) is a passthrough, not a transcode.
-  #
-  # Three Foundry-specific facts, each verified against the live endpoint:
-  #   · auth is `x-api-key` (Azure's own `api-key` header → 401 "invalid subscription key");
-  #   · `anthropic-version` must be a *header* (a body `anthropic_version` → 400);
-  #   · wire_id is the Foundry **deployment** name — `claude-sonnet-4-5` itself → 404
-  #     DeploymentNotFound, because the deployment is named `claude-sonnet-4-5-foundry`.
-  # AZURE_FOUNDRY_ENDPOINT may include the trailing `/anthropic` (the form the portal hands you).
-  - kind: azure-foundry
-    name: azure-foundry
-    endpoint_env: AZURE_FOUNDRY_ENDPOINT   # https://<resource>.services.ai.azure.com
-    api_key_env: AZURE_FOUNDRY_API_KEY
-    models:
-      - alias: azure-claude
-        wire_id: claude-sonnet-4-5-foundry
+services:
+  # ─────────────────────────────────────────────────────────────────────────
+  # Local, upstream-free ops endpoints — the config-driven equivalents of the
+  # source system's hardcoded /health and /v1/models.
+  # ─────────────────────────────────────────────────────────────────────────
+  local:
+    upstreams: []
+    routes:
+      - path: /health
+        methods: [GET]
+        llm_surface: health
+      - path: /v1/models
+        methods: [GET]
+        llm_surface: models
 
-  # ── Bedrock Mantle (OpenAI's own models on AWS — Responses API ONLY) ──────
-  # https://bedrock-mantle.<region>.api.aws/openai/v1/responses — a different endpoint from
-  # `bedrock` above (bedrock-runtime + SigV4 + Anthropic dialect). This is what Codex speaks:
-  #   codex -c model=codex -c model_provider=gw    → POST /v1/responses → passthrough to Mantle.
-  #
-  # Auth is a **Bedrock API key** as a Bearer (AWS_BEARER_TOKEN_BEDROCK — the same variable Codex
-  # itself reads). Short-term keys are **region-scoped**: a key minted for us-east-1 answers
-  # "Credential should be scoped to a valid region" against us-east-2/us-west-2, so `region` here
-  # must match the key. quickstart.sh reads AWS_BEARER_TOKEN_BEDROCK from your environment.
-  #
-  # Model availability is per region *and* per account: in us-east-1 the gpt-5.6 family answers,
-  # while gpt-5.5/gpt-5.4 return "Access to OpenAI models is not allowed from unsupported
-  # countries, regions, or territories" and gpt-oss returns "does not support the
-  # '/openai/v1/responses' API" (it is a Chat Completions model on bedrock-runtime).
-  - kind: bedrock-mantle
-    name: bedrock-mantle
-    region: us-east-1
-    api_key_env: AWS_BEARER_TOKEN_BEDROCK
-    models:
-      - alias: codex                       # what Codex CLI points at
-        wire_id: openai.gpt-5.6-sol
-      - { alias: gpt-5.6-sol,   wire_id: openai.gpt-5.6-sol }
-      - { alias: gpt-5.6-terra, wire_id: openai.gpt-5.6-terra }
-      - { alias: gpt-5.6-luna,  wire_id: openai.gpt-5.6-luna }
+  # ─────────────────────────────────────────────────────────────────────────
+  # The LLM surfaces: one route per client protocol, fanning out to whichever
+  # provider the request's model alias resolves to.
+  # ─────────────────────────────────────────────────────────────────────────
+  llm:
+    upstreams: []
+    routes:
+      - path: /v1/chat/completions
+        methods: [POST]
+        llm_surface: openai-chat
+      - path: /v1/messages
+        methods: [POST]
+        llm_surface: anthropic-messages
+      - path: /v1/responses
+        methods: [POST]
+        llm_surface: openai-responses
+      - path: /v1/embeddings
+        methods: [POST]
+        llm_surface: openai-embeddings
+      - path: /v1/moderations
+        methods: [POST]
+        llm_surface: openai-moderation
