@@ -1,18 +1,22 @@
 # dy — AI Gateway
 
-One OpenAI-compatible endpoint in front of **OpenAI, Anthropic, Google Gemini, Azure OpenAI and
-AWS Bedrock**. You pick the provider with a *model alias*; the gateway transcodes your request to
-that provider's dialect and signs it with that provider's envelope. Your app, your SDK and your
-coding agent never learn there are five providers back there.
+One endpoint in front of **OpenAI, Anthropic, Google Gemini, Azure OpenAI, Azure AI Foundry, AWS
+Bedrock (Claude *and* OpenAI models) and Vertex AI**. You pick the backend with a *model alias*; the
+gateway transcodes your request to that provider's dialect and signs it with that provider's
+envelope. Your app, your SDK and your coding agent never learn there are eight providers back there.
 
 ```
-                    POST /v1/chat/completions   ·   /v1/messages   ·   /v1/responses
+   /v1/chat/completions · /v1/messages · /v1/responses (+ /{id}, /compact, ws) · /v1/embeddings
+   /v1/moderations · /v1/audio/speech · /v1/images · /v1/videos · /v1/files · /v1/batches · /v1/realtime
                                         │  model: "<alias>"
-   ┌────────────┬──────────────────────┼──────────────────┬─────────────────┐
-"fast"       "claude"               "gemini"           "azure"      "bedrock-claude"
-   │        (failover pool)             │                  │                │
- openai   anthropic → bedrock        gemini          azure openai      bedrock (SigV4)
+   ┌──────────┬───────────┬─────────────┼──────────┬──────────────┬──────────────┐
+ "fast"    "claude"    "gemini"      "azure"  "azure-claude"   "codex"     "vertex-claude"
+   │    (failover pool)     │            │           │        (pool)             │
+ openai  anthropic→bedrock gemini  azure openai   foundry   bedrock-mantle→openai  vertex
 ```
+
+27 routes in total; the container logs every one at startup, marked `[alias]` (routed by the model
+you send) or `[binding]` (routed by the id of the resource that created it).
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/dylankyc/dy/main/quickstart.sh | bash
@@ -141,11 +145,35 @@ An alias is what your client sends; `wire_id` is what the provider is asked for.
 | alias | provider | wire id |
 |---|---|---|
 | `fast` | OpenAI | `gpt-4o-mini` |
-| `gpt-4o`, `gpt-4o-mini`, `gpt-5`, `gpt-5.1`, `gpt-5.1-codex`, … | OpenAI | pass-through (alias = wire id) |
-| `claude` | Anthropic → **failover** → Bedrock | `claude-haiku-4-5-20251001` / `us.anthropic.claude-haiku-4-5-…` |
+| `gpt-4o`, `gpt-4o-mini`, `gpt-5`, `gpt-5.1`, … | OpenAI | pass-through (alias = wire id) |
+| `claude` | Anthropic → **failover** → Bedrock | `claude-haiku-4-5-20251001` / `us.anthropic.claude-sonnet-4-…` |
 | `bedrock-claude` | Bedrock (SigV4) | `us.anthropic.claude-haiku-4-5-…` |
 | `gemini` | Google Gemini | `gemini-2.5-flash` |
 | `azure` | Azure OpenAI | `gpt-4o-mini` (the *deployment* name) |
+| `azure-claude` | Azure AI Foundry | `claude-sonnet-4-5-foundry` (the Foundry *deployment*) |
+| `vertex-claude`, `vertex-sonnet-4-5` | Vertex AI | `claude-sonnet-4-6` / `claude-sonnet-4-5@20250929` |
+| `codex` | Bedrock Mantle → **failover** → OpenAI | `openai.gpt-5.6-sol` / `gpt-5.3-codex` |
+| `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna` | Bedrock Mantle (OpenAI models on AWS) | `openai.gpt-5.6-*` |
+
+Aliases for the **non-chat** endpoints declare what they serve, so the gateway can answer a
+mismatch itself instead of relaying a puzzling upstream error:
+
+| alias | endpoint | wire id |
+|---|---|---|
+| `embed` | `/v1/embeddings` | `text-embedding-3-small` |
+| `moderate` | `/v1/moderations` | `omni-moderation-latest` |
+| `tts` | `/v1/audio/speech` (audio bytes out) | `gpt-4o-mini-tts` |
+| `image` | `/v1/images/generations` | `gpt-image-1` |
+| `batch` | `/v1/files` + `/v1/batches` | `gpt-4o-mini` |
+| `voice` | `/v1/realtime/*` | `gpt-realtime` |
+
+```bash
+curl localhost:8000/v1/embeddings  -d '{"model":"embed","input":"hello"}'      -H 'content-type: application/json'
+curl localhost:8000/v1/moderations -d '{"model":"moderate","input":"…"}'       -H 'content-type: application/json'
+curl localhost:8000/v1/audio/speech -d '{"model":"tts","voice":"alloy","input":"hi"}' -H 'content-type: application/json' -o hi.mp3
+# a chat alias on a non-chat endpoint is a *gateway* 404 that names the problem:
+#   model "fast" does not serve embeddings (it resolves to openai)
+```
 
 Two things worth knowing:
 
@@ -199,7 +227,7 @@ provisioned throughput, custom models:
 
 ## 5. What works where
 
-Measured against `dylandylandy/dy:v0.1.12`. Rows are the surface your *client* speaks, columns the
+Measured against `dylandylandy/dy:v0.1.14`. Rows are the surface your *client* speaks, columns the
 provider behind the alias:
 
 | surface | OpenAI (`fast`) | Anthropic (`claude`) | Bedrock (`bedrock-claude`) | Gemini (`gemini`) |
@@ -216,9 +244,11 @@ SSE dialect the client is speaking.
 Because `claude` is a **pool** (`anthropic` → `bedrock`), both legs must support the surface you
 call or the failover half is dead. All three surfaces now cover both hosts.
 
-> Failover triggers on *retryable* upstream errors — timeouts, network failures, `429` and `5xx`.
-> An authentication error (`401` on a bad key) is **terminal by design**: it is a configuration
-> bug you want surfaced, not masked by quietly spending on the next provider.
+> Failover triggers on *retryable* upstream errors — timeouts, network failures, `429` and `5xx` —
+> **and on credential failures**. A `401`/`403` is this backend's problem, not the request's, and
+> short-lived keys are now normal (a Bedrock API key lasts 12 h, a Vertex token ~1 h), so the
+> gateway walks to the next leg and logs which key to rotate. A `400` is never failed over: every
+> backend would reject it identically, so trying another only spends money.
 
 ---
 
@@ -227,7 +257,7 @@ call or the failover half is dead. All three surfaces now cover both hosts.
 `~/.codex/config.toml`:
 
 ```toml
-model = "fast"                  # any alias from /v1/models
+model = "codex"                 # any alias from /v1/models — `codex` is Bedrock Mantle → OpenAI
 model_provider = "aigw"
 
 [model_providers.aigw]
