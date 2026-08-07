@@ -1,0 +1,60 @@
+# OTLP → batch → ClickHouse, self-contained copy of deploy/otel-collector-config.yaml
+# (doc/0065/0066) scoped to this stack's own ClickHouse/Grafana instances, so
+# deploy/gateway-server is independently runnable without the top-level deploy/docker-compose.yaml
+# also being up. Schema is created automatically by the clickhouseexporter on first write.
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+        # gRPC's own default max receive size (4 MiB) is smaller than a single `gen_ai.*` span
+        # attribute can now legitimately be (doc/0190: `attr_cap_bytes` matches the 16 MiB
+        # request/response buffer cap, not a separate smaller truncation) — a large request and
+        # response body on the same span could otherwise exceed 4 MiB combined and the whole span
+        # would be silently dropped, not just that one attribute truncated.
+        max_recv_msg_size_mib: 40
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  batch:
+    timeout: 1s
+    send_batch_size: 1024
+
+exporters:
+  clickhouse:
+    endpoint: tcp://clickhouse:9000?dial_timeout=10s
+    database: otel
+    # create_schema: true provisions the `otel_traces`, `otel_logs`, and `otel_metrics_*` tables
+    # on Collector startup, even before any data arrives — Grafana's trace-view "view logs"
+    # button queries `otel.otel_logs` immediately and needs the table to exist.
+    create_schema: true
+    ttl: 72h
+    timeout: 5s
+    sending_queue:
+      queue_size: 1000
+    retry_on_failure:
+      enabled: true
+      initial_interval: 5s
+      max_interval: 30s
+      max_elapsed_time: 300s
+  debug:
+    verbosity: detailed
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [clickhouse, debug]
+    # gateway-server's telemetry.rs (doc/0188 Phase 10) emits real OTLP logs — short
+    # trace-correlated breadcrumbs ("request received ...", "response sent status=..."), not the
+    # request/response bodies themselves (those are span attributes, see the traces pipeline).
+    logs:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [clickhouse]
+  telemetry:
+    logs:
+      level: info

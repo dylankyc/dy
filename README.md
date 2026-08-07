@@ -34,6 +34,7 @@ That's it — a gateway on **http://127.0.0.1:8000**, ready for `curl`, the Open
 | [`quickstart.sh`](./quickstart.sh) | the bootstrapper — installs, starts, tests, tears down |
 | [`gateway.config.yml`](./gateway.config.yml) | the routes: providers, aliases, wire ids |
 | [`.env.example`](./.env.example) | the credential slots |
+| [`gateway-server/`](./gateway-server/) | same aliases/providers, the Rust-native `gateway-server` binary instead — builds from source, includes a full ClickHouse/OTel/Grafana tracing stack. See its own README — it is **not** `curl \| bash`-able standalone (no published image yet) |
 
 The gateway itself ships as `docker.io/dylandylandy/dy` (a Rust binary in a
 `debian-slim` image, ~120 MB, non-root, healthchecked).

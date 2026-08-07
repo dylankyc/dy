@@ -1,0 +1,29 @@
+# Gateway image for the gateway-server compose demo (doc/0188/0189) — the Rust-native
+# replacement for deploy/ai-gateway's `ffc/llm-gateway` image. Build context is the repo root,
+# like every other stack here: this binary lives in *this* repo's own Cargo workspace, so unlike
+# ai-gateway's Dockerfile (which copies the separate `ffc/` workspace), this one just copies the
+# workspace itself — `crates/`, its `Cargo.toml`/`Cargo.lock`, and the `third_party/linkerd2-proxy`
+# submodule gateway-upstream needs for `RetryBody` (doc/0058).
+#
+# Matches the Dockerfile.gateway every other gateway-server-based deploy/ stack in this repo
+# already uses (e.g. deploy/basic-auth): `gateway-storage`'s `sqlx::query!` macros type-check
+# against a live DATABASE_URL *or* the checked-in `.sqlx/` offline query cache — this demo has no
+# Postgres container, so it needs the cache + SQLX_OFFLINE=true. Debug build — fast to compile,
+# fine for a demo, matching ai-gateway's own choice.
+FROM rust:slim-bookworm AS builder
+RUN apt-get update && apt-get install -y --no-install-recommends pkg-config libssl-dev \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /app
+COPY Cargo.toml Cargo.lock ./
+COPY crates/ crates/
+COPY third_party/ third_party/
+COPY .sqlx/ .sqlx/
+ENV SQLX_OFFLINE=true
+RUN cargo build -p gateway-server
+
+FROM debian:bookworm-slim
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=builder /app/target/debug/gateway-server /usr/local/bin/gateway-server
+EXPOSE 8000
+ENTRYPOINT ["gateway-server"]
