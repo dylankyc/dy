@@ -92,9 +92,11 @@ llm:
           wire_id: "arn:aws:bedrock:us-east-1::inference-profile/us.anthropic.claude-opus-4-8"
 
     # ── Vertex AI (Claude on Google Cloud) — OAuth Bearer, model in the URL ─
+    # `project` is vault-resolved like `credential_ref` — a GCP project id names real
+    # infrastructure just as much as a key does, so it doesn't belong here as a literal.
     - kind: vertex
       name: vertex
-      project: gcp-sdet-test
+      project: "{vault://env/VERTEX_PROJECT}"
       region: global
       models:
         - alias: vertex-claude
@@ -111,10 +113,11 @@ llm:
           wire_id: gemini-2.5-flash
 
     # ── Azure OpenAI (deployment-addressed, Bearer + api-version) ──────────
+    # `endpoint` is vault-resolved like `credential_ref` — an Azure resource host names real
+    # infrastructure just as much as a key does, so it doesn't belong here as a literal.
     - kind: azure-openai
       name: azure
-      # `endpoint`, like `region` above, is a literal — override by editing this file, not env.
-      endpoint: "https://ai-gw-sdet-e2e-test.openai.azure.com"
+      endpoint: "{vault://env/AZURE_ENDPOINT}"
       credential_ref: "{vault://env/AZURE_API_KEY}"
       api_version: "2025-01-01-preview"
       models:
@@ -125,7 +128,7 @@ llm:
     # ── Azure AI Foundry (Claude on Azure — Anthropic Messages, x-api-key) ──
     - kind: azure-foundry
       name: azure-foundry
-      endpoint: "https://claude-sonnet-4-5-eastus2.services.ai.azure.com"
+      endpoint: "{vault://env/AZURE_FOUNDRY_ENDPOINT}"
       credential_ref: "{vault://env/AZURE_FOUNDRY_API_KEY}"
       models:
         - alias: azure-claude

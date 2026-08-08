@@ -250,7 +250,13 @@ ensure_env() {
   put ANTHROPIC_API_KEY "$ant"
   put GEMINI_API_KEY    "$gem"
   put AZURE_API_KEY     "$azk"
+  # No file/default fallback for these three, unlike the keys above: an Azure resource host or a
+  # GCP project id names real infrastructure, so gateway.config.yml reads them through
+  # {vault://env/...} and this script only forwards what's already in *your* environment.
+  put AZURE_ENDPOINT "${AZURE_ENDPOINT:-}"
   put AZURE_FOUNDRY_API_KEY "$azf"
+  put AZURE_FOUNDRY_ENDPOINT "${AZURE_FOUNDRY_ENDPOINT:-}"
+  put VERTEX_PROJECT "${VERTEX_PROJECT:-}"
 
   akid=${AWS_ACCESS_KEY_ID:-}; asak=${AWS_SECRET_ACCESS_KEY:-}; atok=${AWS_SESSION_TOKEN:-}
   if [ -z "$akid" ] && [ -f "$HOME/.aws/credentials" ]; then
@@ -283,9 +289,12 @@ OPENAI_API_KEY=
 ANTHROPIC_API_KEY=
 GEMINI_API_KEY=
 # AZURE_API_KEY=
+# AZURE_ENDPOINT=https://<your-resource>.openai.azure.com
 # AZURE_FOUNDRY_API_KEY=
+# AZURE_FOUNDRY_ENDPOINT=https://<your-resource>.services.ai.azure.com
 # AWS_BEARER_TOKEN_BEDROCK=       # Bedrock API key → OpenAI models on AWS (Codex reads it too)
 # VERTEX_ACCESS_TOKEN=            # gcloud auth print-access-token (expires ~1h)
+# VERTEX_PROJECT=                 # your GCP project id
 # AWS_ACCESS_KEY_ID=
 # AWS_SECRET_ACCESS_KEY=
 # AWS_REGION=us-east-1
